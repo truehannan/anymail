@@ -1,0 +1,93 @@
+name: Test OpenCode
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Install OpenCode
+        run: npm install -g opencode-ai@1.18.25
+
+      - name: Verify OpenCode
+        run: |
+          opencode --version
+          opencode run --help
+
+      - name: Gather commits since previous tag
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="$PREV_TAG..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+
+          echo "Using range: $RANGE"
+
+          git log "$RANGE" \
+            --pretty=format:'%s' \
+            --no-merges \
+            --invert-grep \
+            --grep='^chore: bump version' \
+            > commit_log.txt
+
+          if [ ! -s commit_log.txt ]; then
+            echo "No user-facing changes." > commit_log.txt
+          fi
+
+          echo "===== COMMITS ====="
+          cat commit_log.txt
+
+      - name: Generate release notes
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          PROMPT=$(cat <<'EOF'
+          Write concise, user-facing GitHub release notes.
+
+          Group changes under:
+          - Features
+          - Bug Fixes
+          - Maintenance
+
+          Omit any empty section.
+
+          Use ONLY the commits below.
+          Don't invent features.
+          Output Markdown only.
+
+          Commits:
+          EOF
+          )
+
+          PROMPT="$PROMPT
+
+          $(cat commit_log.txt)"
+
+          opencode run "$PROMPT" \
+            --model opencode/mimo-v2.5-free \
+            --print-logs \
+            | tee release_notes.md
+
+      - name: Print release notes
+        run: |
+          echo "===== RELEASE NOTES ====="
+          cat release_notes.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-notes
+          path: release_notes.md

@@ -1,0 +1,2085 @@
+package com.shrivatsav.monomail.feature.detail
+
+import com.shrivatsav.monomail.ui.components.AvatarCircle
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.net.Uri
+import android.text.TextUtils
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import com.shrivatsav.monomail.ui.theme.cornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Forward
+import androidx.compose.material.icons.automirrored.rounded.Reply
+import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.StarBorder
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material3.Surface
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalConfiguration
+import com.shrivatsav.monomail.data.model.EmailAttachmentInfo
+import com.shrivatsav.monomail.data.model.Email
+import com.shrivatsav.monomail.core.data.settings.EmailTheme
+
+import com.shrivatsav.monomail.data.pgp.PgpDecryptionResult
+import com.shrivatsav.monomail.util.normalizeEmailBody
+import com.shrivatsav.monomail.util.stripUnsafeHtml
+import com.shrivatsav.monomail.util.blockRemoteImageSources
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
+import com.shrivatsav.monomail.ui.theme.MonoTween
+
+import androidx.compose.material3.ModalBottomSheet
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+data class EmailDisplayConfig(
+    val isConversationView: Boolean = true,
+    val fontScaleMultiplier: Float = 1f,
+    val loadRemoteImages: Boolean = false,
+    val emailTheme: EmailTheme = EmailTheme.AUTO,
+    val showInlineImages: Boolean = true,
+    val showInlineAttachments: Boolean = true,
+    val isDeveloperMode: Boolean = false,
+    val use24HourTime: Boolean = false,
+    val currentUserEmail: String = ""
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun EmailDetailScreen(
+    viewModel: EmailDetailViewModel,
+    onBack: () -> Unit,
+    onReply: (to: String, subject: String, body: String, threadId: String, messageId: String) -> Unit = { _, _, _, _, _ -> },
+    onForward: (subject: String, body: String, threadId: String, messageId: String) -> Unit = { _, _, _, _ -> },
+    onFetchAttachment: suspend (String, String) -> ByteArray? = { _, _ -> null },
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit = { _, _, _, _ -> }
+) {
+    // Read settings from ViewModel (consolidated — no direct DataStore collection)
+    val isConversationView by viewModel.isConversationView.collectAsState()
+    val fontScaleMultiplier by viewModel.fontScaleMultiplier.collectAsState()
+    val loadRemoteImages by viewModel.loadRemoteImages.collectAsState()
+    val emailTheme by viewModel.emailTheme.collectAsState()
+    val showInlineImages by viewModel.showInlineImages.collectAsState()
+    val showInlineAttachments by viewModel.showInlineAttachments.collectAsState()
+    val state by viewModel.state.collectAsState()
+    val isStarred by viewModel.isStarred.collectAsState()
+    val decryptedBodies by viewModel.decryptedBodies.collectAsState()
+    val isDeveloperMode by viewModel.isDeveloperMode.collectAsState()
+    val use24HourTime by viewModel.use24HourTime.collectAsState()
+    val currentUserEmail by viewModel.currentUserEmail.collectAsState()
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets(
+            top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
+            bottom = 0.dp
+        ),
+        topBar = {
+            TopAppBar(
+                title = {},
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { viewModel.toggleStar() }) {
+                        AnimatedContent(
+                            targetState = isStarred,
+                            transitionSpec = {
+                                (fadeIn(MonoTween.fadeIn) + scaleIn(MonoTween.fadeIn)) togetherWith
+                                        (fadeOut(MonoTween.fadeOut) + scaleOut(MonoTween.fadeOut))
+                            },
+                            label = "starToggle"
+                        ) { starred ->
+                            Icon(
+                                imageVector = if (starred) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                                contentDescription = if (starred) "Unstar" else "Star",
+                                tint = if (starred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                    var showMenu by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = "More",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        androidx.compose.material3.DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Mark Unread") },
+                                onClick = { showMenu = false; viewModel.markUnread(onComplete = { onBack() }) }
+                            )
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Archive") },
+                                onClick = { showMenu = false; viewModel.archiveThread(onComplete = { onBack() }) }
+                            )
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Move to Trash") },
+                                onClick = { showMenu = false; viewModel.trashThread(onComplete = { onBack() }) }
+                            )
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
+            )
+        }
+    ) { padding ->
+        DetailContent(
+            state = state,
+            padding = padding,
+            config = EmailDisplayConfig(
+                isConversationView = isConversationView,
+                fontScaleMultiplier = fontScaleMultiplier,
+                loadRemoteImages = loadRemoteImages,
+                emailTheme = emailTheme,
+                showInlineImages = showInlineImages,
+                showInlineAttachments = showInlineAttachments,
+                use24HourTime = use24HourTime,
+                isDeveloperMode = isDeveloperMode,
+                currentUserEmail = currentUserEmail
+            ),
+            decryptedBodies = decryptedBodies,
+            onReply = onReply,
+            onForward = onForward,
+            onFetchAttachment = onFetchAttachment,
+            onNavigateToAttachmentViewer = onNavigateToAttachmentViewer,
+            onToggleGroup = { viewModel.expandEmails(it) },
+            onRetry = { viewModel.retry() },
+            onStarMessage = { id, starred -> viewModel.toggleEmailStar(id, starred) },
+            onArchiveMessage = { id -> 
+                val threadId = (state as? EmailDetailState.Success)?.emails?.firstOrNull()?.threadId
+                if (threadId != null) {
+                    viewModel.archiveEmail(id, threadId)
+                }
+            },
+            onDeleteMessage = { id -> 
+                val threadId = (state as? EmailDetailState.Success)?.emails?.firstOrNull()?.threadId
+                if (threadId != null) {
+                    viewModel.trashEmail(id, threadId)
+                }
+            }
+        )
+    }
+
+}
+
+@Composable
+private fun DetailContent(
+    state: EmailDetailState,
+    padding: androidx.compose.foundation.layout.PaddingValues,
+    config: EmailDisplayConfig,
+    decryptedBodies: Map<String, PgpDecryptionResult>,
+    onReply: (to: String, subject: String, body: String, threadId: String, messageId: String) -> Unit,
+    onForward: (subject: String, body: String, threadId: String, messageId: String) -> Unit,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit = { _, _, _, _ -> },
+    onToggleGroup: (List<String>) -> Unit = {},
+    onRetry: () -> Unit = {},
+    onStarMessage: (String, Boolean) -> Unit = { _, _ -> },
+    onArchiveMessage: (String) -> Unit = {},
+    onDeleteMessage: (String) -> Unit = {}
+) {
+    when (val s = state) {
+        is EmailDetailState.Error -> {
+            com.shrivatsav.monomail.ui.components.EmptyStateView(
+                illustration = com.shrivatsav.monomail.ui.components.IllustrationType.ERROR_CLOUD,
+                title = "Something went wrong",
+                subtitle = s.message,
+                ctaText = "Retry",
+                onCtaClick = onRetry,
+                isError = true
+            )
+        }
+
+        is EmailDetailState.Success -> {
+            val emails = s.emails
+            val items = s.items
+            Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+                if (s.isRefreshing) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                if (s.refreshError != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = s.refreshError,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onRetry) { Text("Retry") }
+                    }
+                }
+                // Crossfade between the loading placeholder and the actual thread content
+                // instead of hard-cutting between them — this removes the "pop" that made
+                // opening an email feel like three separate screens stitched together.
+                Crossfade(
+                    targetState = emails.isEmpty(),
+                    label = "emailDetailContent",
+                    modifier = Modifier.weight(1f)
+                ) { isEmpty ->
+                    if (isEmpty) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    "Loading…",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                )
+                            }
+                        }
+                    } else {
+                        val latestEmail = emails.lastOrNull() ?: return@Crossfade
+                        val latestBody = decryptedBodies[latestEmail.id]?.decryptedBody ?: latestEmail.body
+                        val myEmail = config.currentUserEmail
+                        val replyTarget = emails.lastOrNull {
+                            it.fromEmail.isNotBlank() && !it.fromEmail.equals(myEmail, ignoreCase = true)
+                        }?.fromEmail ?: latestEmail.to.split(",").map { it.trim() }.filter {
+                            it.isNotBlank() && !it.equals(myEmail, ignoreCase = true)
+                        }.joinToString(", ").ifEmpty { latestEmail.to }
+                        ThreadConversationContent(
+                            items = items,
+                            emails = emails,
+                            decryptedBodies = decryptedBodies,
+                            modifier = Modifier.fillMaxSize(),
+                            config = config,
+                            onReply = {
+                                onReply(
+                                    replyTarget,
+                                    latestEmail.subject,
+                                    latestBody,
+                                    latestEmail.threadId,
+                                    latestEmail.id
+                                )
+                            },
+                            onForward = {
+                                onForward(
+                                    latestEmail.subject,
+                                    latestBody,
+                                    latestEmail.threadId,
+                                    latestEmail.id
+                                )
+                            },
+                            onFetchAttachment = onFetchAttachment,
+                            onNavigateToAttachmentViewer = onNavigateToAttachmentViewer,
+                            onToggleGroup = onToggleGroup,
+                            onStarMessage = onStarMessage,
+                            onArchiveMessage = onArchiveMessage,
+                            onDeleteMessage = onDeleteMessage
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ThreadConversationContent(
+    items: List<ThreadListItem>,
+    emails: List<Email>,
+    decryptedBodies: Map<String, PgpDecryptionResult> = emptyMap(),
+    modifier: Modifier = Modifier,
+    config: EmailDisplayConfig = EmailDisplayConfig(),
+    onReply: () -> Unit = {},
+    onForward: () -> Unit = {},
+    onFetchAttachment: suspend (String, String) -> ByteArray? = { _, _ -> null },
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit = { _, _, _, _ -> },
+    onToggleGroup: (List<String>) -> Unit = {},
+    onStarMessage: (String, Boolean) -> Unit = { _, _ -> },
+    onArchiveMessage: (String) -> Unit = {},
+    onDeleteMessage: (String) -> Unit = {}
+) {
+    val expandedMap = remember(emails) {
+        if (config.isConversationView) {
+            mutableStateMapOf<String, Boolean>().apply {
+                emails.forEachIndexed { index, email ->
+                    put(email.id, index == emails.lastIndex)
+                }
+            }
+        } else {
+            mutableStateMapOf<String, Boolean>().apply {
+                emails.forEach { put(it.id, true) }
+            }
+        }
+    }
+    val subject = emails.firstOrNull()?.subject ?: "(no subject)"
+    // LazyColumn instead of Column+verticalScroll: previously every message in the thread —
+    // and therefore every message's WebView — was composed and loaded eagerly the moment the
+    // screen opened, even messages that were collapsed or scrolled far off-screen. For long
+    // threads this meant paying the WebView-creation + HTML-load cost N times up front, all
+    // stacked on top of the state-transition pop. LazyColumn only composes what's near the
+    // viewport, so a message's WebView isn't created until it's about to be visible.
+    LazyColumn(modifier = modifier.fillMaxSize()) {
+        item {
+            Text(
+                text = subject,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+            )
+        }
+        if (emails.size > 1) {
+            item {
+                Column {
+                    Text(
+                        text = "${emails.size} messages in thread",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 0.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+        }
+
+        itemsIndexed(items, key = { index, item -> 
+            when (item) {
+                is ThreadListItem.Message -> item.email.id
+                is ThreadListItem.CollapsedGroup -> "group_${item.hiddenEmailIds.firstOrNull()}_$index"
+            }
+        }) { index, item ->
+            when (item) {
+                is ThreadListItem.Message -> {
+                    val email = item.email
+                    val isExpanded = expandedMap[email.id] ?: item.isExpanded
+                    if (config.isConversationView) {
+                        ConversationEmailItem(
+                            email = email,
+                            index = emails.indexOf(email),
+                            isExpanded = isExpanded,
+                            onToggleExpand = { expandedMap[email.id] = !isExpanded },
+                            config = config,
+                            decryptedBodies = decryptedBodies,
+                            onFetchAttachment = onFetchAttachment,
+                            onNavigateToAttachmentViewer = onNavigateToAttachmentViewer,
+                            onStar = { onStarMessage(email.id, email.isStarred) },
+                            onArchive = { onArchiveMessage(email.id) },
+                            onDelete = { onDeleteMessage(email.id) }
+                        )
+                    } else {
+                        MessageBody(
+                            email = email,
+                            decryptedResult = decryptedBodies[email.id],
+                            config = config,
+                            onFetchAttachment = onFetchAttachment,
+                            onNavigateToAttachmentViewer = onNavigateToAttachmentViewer,
+                            showSender = true,
+                            messageCount = emails.size
+                        )
+                    }
+                }
+                is ThreadListItem.CollapsedGroup -> {
+                    CollapsedGroupItem(
+                        count = item.count,
+                        onClick = { onToggleGroup(item.hiddenEmailIds) }
+                    )
+                }
+            }
+            if (index < items.lastIndex) {
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+            }
+        }
+
+        item {
+            Column {
+                Spacer(modifier = Modifier.height(24.dp))
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp)
+                        .padding(bottom = 40.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = onReply,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        shape = cornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.onBackground,
+                            contentColor = MaterialTheme.colorScheme.background
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Reply,
+                            contentDescription = "Reply",
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Reply", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                    }
+                    OutlinedButton(
+                        onClick = onForward,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        shape = cornerShape(16.dp),
+                        border = BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f)
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Forward,
+                            contentDescription = "Forward",
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Forward", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConversationEmailItem(
+    email: Email,
+    index: Int,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
+    config: EmailDisplayConfig,
+    decryptedBodies: Map<String, PgpDecryptionResult>,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit,
+    onStar: () -> Unit,
+    onArchive: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    if (index % 2 == 1 && isExpanded)
+                        MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.25f)
+                    else MaterialTheme.colorScheme.background
+                )
+                .clickable { onToggleExpand() }
+                .padding(start = 16.dp, end = 24.dp, top = 12.dp, bottom = 0.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Box(modifier = Modifier.width(40.dp)) {
+                AvatarCircle(
+                    photoUrl = null,
+                    displayName = displayName(email.from),
+                    size = 36.dp,
+                    textStyle = MaterialTheme.typography.titleSmall
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = displayName(email.from),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = formatRelativeDate(email.date, config.use24HourTime),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Box {
+                        IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = "Message options",
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                            shape = MaterialTheme.shapes.extraSmall
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(if (email.isStarred) "Unstar" else "Star") },
+                                onClick = { showMenu = false; onStar() },
+                                leadingIcon = { Icon(if (email.isStarred) Icons.Rounded.Star else Icons.Rounded.StarBorder, null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Archive") },
+                                onClick = { showMenu = false; onArchive() },
+                                leadingIcon = { Icon(Icons.Rounded.Archive, null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete") },
+                                onClick = { showMenu = false; onDelete() },
+                                leadingIcon = { Icon(Icons.Rounded.Delete, null) }
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = email.fromEmail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                ToRow(email = email)
+                if (!isExpanded) {
+                    val snippetText = remember(email.snippet) {
+                        email.snippet
+                            .replace(Regex("^\\s*(>|&gt;|\\|).*", RegexOption.MULTILINE), "")
+                            .replace(Regex("On\\s.+\\swrote:"), "")
+                            .replace(Regex("<blockquote[^>]*>[\\s\\S]*?</blockquote>"), "")
+                            .trim()
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = snippetText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+        if (!config.showInlineAttachments && email.attachments.isNotEmpty()) {
+            val perEmailAttachments = email.attachments.map { it to displayName(email.from) }
+            ThreadAttachmentsSummary(
+                attachmentsWithSender = perEmailAttachments,
+                onFetchAttachment = onFetchAttachment,
+                onNavigateToAttachmentViewer = onNavigateToAttachmentViewer
+            )
+        }
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = fadeIn(tween(200)) + expandVertically(androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 400f)),
+            exit = fadeOut(tween(150)) + shrinkVertically(androidx.compose.animation.core.spring(dampingRatio = 0.9f, stiffness = 400f))
+        ) {
+            ConversationEmailBody(email, index, config, decryptedBodies, onFetchAttachment, onNavigateToAttachmentViewer)
+        }
+    }
+}
+@Composable
+private fun ConversationEmailBody(
+    email: Email, index: Int, config: EmailDisplayConfig,
+    decryptedBodies: Map<String, PgpDecryptionResult>,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().background(
+            if (index % 2 == 1) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.25f)
+            else MaterialTheme.colorScheme.background
+        )
+    ) {
+        Box(
+            modifier = Modifier.width(2.dp).fillMaxHeight().heightIn(min = 120.dp).padding(start = 28.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+        )
+        Column(modifier = Modifier.weight(1f).heightIn(min = 120.dp)) {
+            CcBccBlock(email)
+            MessageBody(
+                email = email,
+                decryptedResult = decryptedBodies[email.id],
+                config = config,
+                onFetchAttachment = onFetchAttachment,
+                onNavigateToAttachmentViewer = onNavigateToAttachmentViewer,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun CcBccBlock(email: Email) {
+    if (email.cc.isNotBlank() || email.bcc.isNotBlank()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 8.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
+                .background(
+                    MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.4f),
+                    cornerShape(8.dp)
+                )
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (email.cc.isNotBlank()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "cc:",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = email.cc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 5,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                if (email.bcc.isNotBlank()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "bcc:",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = email.bcc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 5,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageBody(
+    email: Email,
+    decryptedResult: PgpDecryptionResult? = null,
+    config: EmailDisplayConfig,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit = { _, _, _, _ -> },
+    showSender: Boolean = false,
+    messageCount: Int = 0,
+    modifier: Modifier = Modifier
+) {
+    val isEncryptedBlob = isEncryptedBlob(email)
+    val normalizedBody = if (isEncryptedBlob) {
+        normalizeEmailBody("", bodyIsHtml = false)
+    } else {
+        normalizeEmailBody(decryptedResult?.decryptedBody ?: email.body, email.bodyIsHtml)
+    }
+    val bodyText = normalizedBody.text
+    val bodyIsHtml = !isEncryptedBlob && normalizedBody.isHtml
+    val safeBodyText = if (bodyIsHtml) stripUnsafeHtml(bodyText) else bodyText
+    Column(modifier = modifier) {
+        EncryptionBadge(decryptedResult)
+        if (isEncryptedBlob) {
+            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 32.dp)) {
+                Text(
+                    text = "Decrypting…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+            return
+        }
+        MessageBodyContent(email, safeBodyText, bodyIsHtml, config, showSender, messageCount, onFetchAttachment, onNavigateToAttachmentViewer)
+    }
+}
+
+private fun isEncryptedBlob(email: Email): Boolean =
+    email.body.startsWith("-----BEGIN PGP MESSAGE-----") ||
+            email.body.contains("multipart/encrypted;") ||
+            email.body.contains("multipart/encrypted\r\n")
+@Composable
+private fun MessageBodyContent(
+    email: Email,
+    safeBodyText: String,
+    bodyIsHtml: Boolean,
+    config: EmailDisplayConfig,
+    showSender: Boolean,
+    messageCount: Int,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit
+) {
+    var showQuotedText by remember { mutableStateOf(false) }
+    val hasQuotedText = remember(safeBodyText) { hasQuotedTextBlock(safeBodyText) }
+    if (showSender) {
+        SenderInfoSection(email, messageCount, config.use24HourTime)
+    }
+    if (showSender && !config.showInlineAttachments && email.attachments.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(8.dp))
+        ThreadAttachmentsSummary(
+            attachmentsWithSender = email.attachments.map { it to displayName(email.from) },
+            onFetchAttachment = onFetchAttachment,
+            onNavigateToAttachmentViewer = onNavigateToAttachmentViewer
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+    var showRemoteImages by remember { mutableStateOf(false) }
+    RemoteImagesBanner(config.loadRemoteImages, showRemoteImages, bodyIsHtml) { showRemoteImages = true }
+    val textColor = String.format("#%06X", 0xFFFFFF and MaterialTheme.colorScheme.onBackground.toArgb())
+    val linkColor = String.format("#%06X", 0xFFFFFF and MaterialTheme.colorScheme.primary.toArgb())
+    val useOverviewScaling = remember(safeBodyText, bodyIsHtml) {
+        bodyIsHtml && looksFixedWidthTemplate(safeBodyText) && !looksMobileFriendly(safeBodyText) && !looksDataTableEmail(
+            safeBodyText
+        )
+    }
+    val emailZoomFactor = if (useOverviewScaling) {
+        val screenWidthDp = LocalConfiguration.current.screenWidthDp
+        ((screenWidthDp - 56).toFloat() / 600f).coerceIn(0.3f, 1.0f)
+    } else 1.0f
+    var htmlContent by remember(email.id) { mutableStateOf("") }
+    LaunchedEffect(
+        email.id,
+        safeBodyText,
+        config.fontScaleMultiplier,
+        showQuotedText,
+        config.showInlineImages,
+        config.loadRemoteImages,
+        showRemoteImages,
+        config.emailTheme,
+        useOverviewScaling,
+        emailZoomFactor
+    ) {
+        htmlContent = ""
+        htmlContent = withContext(Dispatchers.Default) {
+            buildEmailHtml(
+                email,
+                safeBodyText,
+                bodyIsHtml,
+                config.fontScaleMultiplier,
+                HtmlBuildParams(
+                    showQuotedText,
+                    config.showInlineImages,
+                    config.loadRemoteImages,
+                    showRemoteImages,
+                    useOverviewScaling,
+                    emailZoomFactor,
+                    textColor,
+                    linkColor
+                )
+            )
+        }
+    }
+    EmailWebViewCard(
+        email.id,
+        htmlContent,
+        config.emailTheme,
+        useOverviewScaling,
+        allowRemoteImages = config.loadRemoteImages || showRemoteImages
+    )
+    if (hasQuotedText) {
+        QuotedTextToggle(showQuotedText) { showQuotedText = !showQuotedText }
+    }
+    if (config.isDeveloperMode) {
+        DeveloperCopyButton(email)
+    }
+    if (config.showInlineAttachments && email.attachments.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(16.dp))
+        AttachmentsSection(attachments = email.attachments, onFetchAttachment = onFetchAttachment, onNavigateToAttachmentViewer = onNavigateToAttachmentViewer)
+    }
+}
+
+private fun hasQuotedTextBlock(body: String): Boolean =
+    body.contains("<blockquote", ignoreCase = true) ||
+            body.contains("gmail_quote", ignoreCase = true) ||
+            body.contains("gmail_extra", ignoreCase = true) ||
+            body.contains("yahoo_quoted", ignoreCase = true) ||
+            body.contains("moz-cite-prefix", ignoreCase = true) ||
+            body.contains("appendonsend", ignoreCase = true) ||
+            body.contains("divRplyFwdMsg", ignoreCase = true) ||
+            (body.contains("On ", ignoreCase = true) && body.contains(" wrote:", ignoreCase = true))
+
+@Composable
+private fun EncryptionBadge(decryptedResult: PgpDecryptionResult?) {
+    if (decryptedResult == null) return
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f), cornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Lock,
+            contentDescription = "Encrypted",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(text = "Encrypted", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        val sigs = decryptedResult.signatures
+        if (!sigs.isNullOrEmpty()) {
+            Spacer(modifier = Modifier.width(12.dp))
+            sigs.forEach { sig ->
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = if (sig.isValid) Icons.Rounded.CheckCircle else Icons.Rounded.Warning,
+                    contentDescription = if (sig.isValid) "Valid signature" else "Invalid signature",
+                    tint = if (sig.isValid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = sig.signer,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SenderInfoSection(email: Email, messageCount: Int, use24HourTime: Boolean) {
+    val isMsgUnread = !email.isRead
+    var showCcBcc by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+        SenderDetails(email, isMsgUnread, use24HourTime)
+        Spacer(modifier = Modifier.height(8.dp))
+        ToRow(email) { showCcBcc = !showCcBcc }
+        if (showCcBcc && (email.cc.isNotBlank() || email.bcc.isNotBlank())) {
+            CcBccDetails(email)
+        }
+        if (messageCount > 1) {
+            Text(
+                text = "$messageCount messages in thread",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SenderDetails(email: Email, isMsgUnread: Boolean, use24HourTime: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        AvatarCircle(
+            photoUrl = null,
+            displayName = displayName(email.from),
+            size = 40.dp,
+            textStyle = MaterialTheme.typography.titleMedium
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = displayName(email.from),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = if (isMsgUnread) FontWeight.Bold else FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = formatDetailDate(email.date, use24HourTime),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                )
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = email.fromEmail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (isMsgUnread) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToRow(email: Email, onToggleCcBcc: (() -> Unit)? = null) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "to:",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = email.to,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f)
+                .then(
+                    if (onToggleCcBcc != null) {
+                        Modifier.clickable {
+                            if (email.cc.isNotBlank() || email.bcc.isNotBlank()) onToggleCcBcc()
+                        }
+                    } else {
+                        Modifier
+                    }
+                )
+        )
+    }
+}
+
+@Composable
+private fun CcBccDetails(email: Email) {
+    Column {
+        if (email.cc.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "cc:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = email.cc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    maxLines = 5,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (email.bcc.isNotBlank()) {
+            if (email.cc.isNotBlank()) Spacer(modifier = Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "bcc:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = email.bcc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    maxLines = 5,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemoteImagesBanner(
+    loadRemoteImages: Boolean,
+    showRemoteImages: Boolean,
+    bodyIsHtml: Boolean,
+    onShow: () -> Unit
+) {
+    if (!loadRemoteImages && !showRemoteImages && bodyIsHtml) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f), cornerShape(8.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Remote images blocked",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onShow) { Text("Show images", style = MaterialTheme.typography.labelSmall) }
+        }
+    }
+}
+
+@Composable
+private fun QuotedTextToggle(showQuotedText: Boolean, onToggle: () -> Unit) {
+    TextButton(onClick = onToggle, modifier = Modifier.padding(start = 16.dp)) {
+        Icon(
+            imageVector = if (showQuotedText) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = if (showQuotedText) "Hide quoted text" else "Show quoted text",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+        )
+    }
+}
+
+@Composable
+private fun DeveloperCopyButton(email: Email) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    TextButton(
+        onClick = {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("email_body", email.body))
+            android.widget.Toast.makeText(context, "Raw body copied", android.widget.Toast.LENGTH_SHORT).show()
+        },
+        modifier = Modifier.padding(start = 16.dp)
+    ) {
+        Icon(imageVector = Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = "Copy raw ${if (email.bodyIsHtml) "HTML" else "text"}",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+        )
+    }
+}
+
+@Composable
+private fun EmailWebViewCard(
+    emailId: String,
+    htmlContent: String,
+    emailTheme: EmailTheme,
+    useOverviewScaling: Boolean,
+    allowRemoteImages: Boolean
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var pendingLink by remember(emailId) { mutableStateOf<Uri?>(null) }
+    var renderGeneration by remember(emailId, htmlContent, allowRemoteImages) { mutableStateOf(0) }
+    var rendererRetryCount by remember(emailId, htmlContent, allowRemoteImages) { mutableStateOf(0) }
+    var isLoaded by remember(emailId, htmlContent, allowRemoteImages, renderGeneration) { mutableStateOf(false) }
+    var loadError by remember(emailId, htmlContent, allowRemoteImages, renderGeneration) { mutableStateOf<String?>(null) }
+    val alpha by animateFloatAsState(
+        targetValue = if (isLoaded) 1f else 0f,
+        animationSpec = tween(300),
+        label = "WebViewFade"
+    )
+    var emailContentWebView by remember(emailId, htmlContent, allowRemoteImages, renderGeneration) { mutableStateOf<WebView?>(null) }
+    DisposableEffect(emailId, htmlContent, allowRemoteImages, renderGeneration) {
+        onDispose { emailContentWebView?.apply { removeAllViews(); destroy() }; emailContentWebView = null }
+    }
+    val cardBgColor = if (emailTheme == EmailTheme.ORIGINAL) Color.White else Color.Transparent
+    val useDarkening = when (emailTheme) {
+        EmailTheme.AUTO -> isSystemInDarkTheme()
+        EmailTheme.ORIGINAL -> false
+    }
+    Column {
+        if (htmlContent.isBlank()) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(72.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+        } else {
+            androidx.compose.runtime.key(emailId, htmlContent, allowRemoteImages, renderGeneration) {
+                val callbackGeneration = renderGeneration
+                AndroidView(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                        .clip(cornerShape(16.dp)).background(cardBgColor, cornerShape(16.dp)).padding(12.dp)
+                        .alpha(alpha),
+                    factory = { context ->
+                        WebView(context).apply {
+                            emailContentWebView = this
+                            configureWebView(this, allowRemoteImages)
+                            setOnTouchListener(createTouchHandler())
+                            webViewClient = createWebViewClient(
+                                allowRemoteImages = allowRemoteImages,
+                                onLinkClick = { pendingLink = it },
+                                onPageFinished = {
+                                    if (callbackGeneration == renderGeneration) {
+                                        loadError = null
+                                        isLoaded = true
+                                    }
+                                },
+                                onMainFrameError = { message ->
+                                    if (callbackGeneration == renderGeneration) {
+                                        isLoaded = false
+                                        loadError = message
+                                    }
+                                },
+                                onRenderProcessGone = {
+                                    if (callbackGeneration == renderGeneration) {
+                                        emailContentWebView = null
+                                        isLoaded = false
+                                        if (rendererRetryCount < 1) {
+                                            rendererRetryCount++
+                                            renderGeneration++
+                                        } else {
+                                            loadError = "Email renderer stopped unexpectedly."
+                                        }
+                                    }
+                                }
+                            )
+                            try {
+                                loadDataWithBaseURL(
+                                    "file:///android_asset/",
+                                    patchEmailHtml(htmlContent),
+                                    "text/html",
+                                    "UTF-8",
+                                    null
+                                )
+                            } catch (e: Exception) {
+                                android.util.Log.e("EmailWebView", "Failed to load email HTML content", e)
+                                if (callbackGeneration == renderGeneration) {
+                                    loadError = "Could not render this email."
+                                }
+                            }
+                        }
+                    },
+                    update = { webView ->
+                    webView.settings.loadWithOverviewMode = false
+                    webView.settings.useWideViewPort = false
+                    webView.isHorizontalScrollBarEnabled = !useOverviewScaling
+                    webView.settings.blockNetworkImage = !allowRemoteImages
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+                        WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, useDarkening)
+                    }
+                    }
+                )
+            }
+            if (!isLoaded && loadError == null) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp))
+            }
+            loadError?.let { message ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = {
+                        loadError = null
+                        isLoaded = false
+                        renderGeneration++
+                    }) { Text("Retry") }
+                }
+            }
+        }
+    }
+
+    pendingLink?.let { uri ->
+        LinkPreviewDialog(
+            uri = uri,
+            onDismiss = { pendingLink = null },
+            onOpen = {
+                pendingLink = null
+                openExternalLink(context, uri)
+            }
+        )
+    }
+}
+
+@Composable
+private fun LinkPreviewDialog(
+    uri: Uri,
+    onDismiss: () -> Unit,
+    onOpen: () -> Unit
+) {
+    val supported = isSupportedExternalLink(uri)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Open external link?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    linkDestinationLabel(uri),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                SelectionContainer {
+                    Text(
+                        uri.toString(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (!supported) {
+                    Text(
+                        "This link type isn't supported for safety.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = {
+            Row {
+                TextButton(onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Link", uri.toString()))
+                    Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
+                }) { Text("Copy") }
+                TextButton(onClick = onOpen, enabled = supported) { Text("Open") }
+            }
+        }
+    )
+}
+
+internal fun isSupportedExternalLink(uri: Uri): Boolean = when (uri.scheme?.lowercase(Locale.ROOT)) {
+    "http", "https" -> !uri.host.isNullOrBlank()
+    "mailto", "tel" -> uri.schemeSpecificPart.isNotBlank()
+    else -> false
+}
+
+internal fun linkDestinationLabel(uri: Uri): String = when (uri.scheme?.lowercase(Locale.ROOT)) {
+    "http", "https" -> uri.host?.takeIf { it.isNotBlank() } ?: "Web link"
+    "mailto" -> uri.schemeSpecificPart.substringBefore('?').ifBlank { "Email address" }
+    "tel" -> uri.schemeSpecificPart.ifBlank { "Phone number" }
+    else -> "Unknown destination"
+}
+
+private fun openExternalLink(context: Context, uri: Uri) {
+    if (!isSupportedExternalLink(uri)) return
+    try {
+        context.startActivity(
+            android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+                .apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+        )
+    } catch (e: Exception) {
+        android.util.Log.w("EmailDetail", "No app could open external link", e)
+        Toast.makeText(context, "No app can open this link", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun patchEmailHtml(htmlContent: String): String {
+    val overrideStyle = "<style>html, body { height: auto !important; min-height: unset !important; }</style>"
+    return if (htmlContent.contains("</head>", ignoreCase = true)) {
+        val index = htmlContent.indexOf("</head>", ignoreCase = true)
+        htmlContent.substring(0, index) + overrideStyle + htmlContent.substring(index)
+    } else {
+        overrideStyle + htmlContent
+    }
+}
+
+private fun configureWebView(webView: WebView, allowRemoteImages: Boolean) {
+    webView.settings.javaScriptEnabled = false
+    webView.settings.domStorageEnabled = false
+    webView.settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
+    webView.settings.cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
+    webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+    webView.settings.loadsImagesAutomatically = true
+    webView.settings.blockNetworkImage = !allowRemoteImages
+    try {
+        WebView::class.java.getMethod("setAllowFileAccess", Boolean::class.java).invoke(webView, false)
+    } catch (_: Exception) {
+    }
+    try {
+        WebView::class.java.getMethod("setAllowContentAccess", Boolean::class.java).invoke(webView, false)
+    } catch (_: Exception) {
+    }
+    webView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+    webView.isVerticalScrollBarEnabled = false
+    webView.isHorizontalScrollBarEnabled = true
+}
+
+private fun createTouchHandler(): android.view.View.OnTouchListener {
+    var downX = 0f;
+    var downY = 0f
+    return android.view.View.OnTouchListener { view, event ->
+        when (event.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                downX = event.x; downY = event.y; view.parent?.requestDisallowInterceptTouchEvent(true)
+            }
+
+            android.view.MotionEvent.ACTION_MOVE -> {
+                view.parent?.requestDisallowInterceptTouchEvent(kotlin.math.abs(event.x - downX) > kotlin.math.abs(event.y - downY))
+            }
+
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                view.parent?.requestDisallowInterceptTouchEvent(false)
+            }
+        }
+        false
+    }
+}
+
+private fun createWebViewClient(
+    allowRemoteImages: Boolean,
+    onLinkClick: (Uri) -> Unit,
+    onPageFinished: () -> Unit,
+    onMainFrameError: (String) -> Unit,
+    onRenderProcessGone: () -> Unit
+) = object : android.webkit.WebViewClient() {
+    private var mainFrameFailed = false
+
+    override fun shouldInterceptRequest(
+        view: android.webkit.WebView?,
+        request: android.webkit.WebResourceRequest?
+    ): android.webkit.WebResourceResponse? {
+        val scheme = request?.url?.scheme?.lowercase()
+        if (!allowRemoteImages && (scheme == "http" || scheme == "https")) {
+            return android.webkit.WebResourceResponse(
+                "text/plain",
+                "UTF-8",
+                java.io.ByteArrayInputStream(ByteArray(0))
+            )
+        }
+        return super.shouldInterceptRequest(view, request)
+    }
+
+    override fun shouldOverrideUrlLoading(
+        view: android.webkit.WebView?,
+        request: android.webkit.WebResourceRequest?
+    ): Boolean {
+        request?.url?.let { uri ->
+            onLinkClick(uri)
+            return true
+        }
+        return super.shouldOverrideUrlLoading(view, request)
+    }
+
+    override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+        super.onPageFinished(view, url)
+        if (!mainFrameFailed) onPageFinished()
+    }
+
+    override fun onReceivedError(
+        view: android.webkit.WebView?,
+        request: android.webkit.WebResourceRequest?,
+        error: android.webkit.WebResourceError?
+    ) {
+        if (request?.isForMainFrame == true) {
+            mainFrameFailed = true
+            onMainFrameError(error?.description?.toString() ?: "Could not render this email.")
+        }
+    }
+
+    override fun onReceivedHttpError(
+        view: android.webkit.WebView?,
+        request: android.webkit.WebResourceRequest?,
+        errorResponse: android.webkit.WebResourceResponse?
+    ) {
+        super.onReceivedHttpError(view, request, errorResponse)
+        if (request?.isForMainFrame == true) {
+            mainFrameFailed = true
+            onMainFrameError("Could not render this email (${errorResponse?.statusCode ?: "HTTP error"}).")
+        }
+    }
+
+    override fun onRenderProcessGone(
+        view: android.webkit.WebView?,
+        detail: android.webkit.RenderProcessGoneDetail?
+    ): Boolean {
+        view?.apply {
+            stopLoading()
+            removeAllViews()
+            destroy()
+        }
+        onRenderProcessGone()
+        return true
+    }
+}
+
+private data class HtmlBuildParams(
+    val showQuotedText: Boolean, val showInlineImages: Boolean, val loadRemoteImages: Boolean,
+    val showRemoteImages: Boolean, val useOverviewScaling: Boolean, val emailZoomFactor: Float,
+    val textColor: String, val linkColor: String
+)
+
+private fun buildEmailHtml(
+    email: Email, safeBodyText: String, bodyIsHtml: Boolean, fontScaleMultiplier: Float,
+    params: HtmlBuildParams
+): String {
+    val (showQuotedText, showInlineImages, loadRemoteImages, showRemoteImages, useOverviewScaling, emailZoomFactor, textColor, linkColor) = params
+    val displayBody = if (bodyIsHtml) safeBodyText else TextUtils.htmlEncode(safeBodyText).replace("\n", "<br>")
+    val bodyWithCidPlaceholders = if (!showInlineImages && email.attachments.isNotEmpty()) {
+        var b = displayBody
+        for (att in email.attachments) {
+            if (att.name.isBlank()) continue
+            val cidPattern =
+                Regex("""<img[^>]*src\s*=\s*["']cid:${Regex.escape(att.name)}["'][^>]*>""", RegexOption.IGNORE_CASE)
+            b =
+                b.replace(cidPattern) { """<div style="padding:8px;margin:8px 0;background:#f0f0f0;border-radius:6px;text-align:center;font-family:sans-serif;font-size:13px;color:#666;">📎 <em>${att.name}</em> (inline image — see attachments)</div>""" }
+        }
+        b
+    } else displayBody
+
+    val remoteImagesBlocked = !loadRemoteImages && !showRemoteImages
+    val bodyWithBlockedRemoteSources = if (remoteImagesBlocked) blockRemoteImageSources(bodyWithCidPlaceholders) else bodyWithCidPlaceholders
+    val imgBlockCss = if (remoteImagesBlocked) """
+        img[src^="http://"] { display: none !important; }
+        img[src^="https://"] { display: none !important; }
+    """.trimIndent() else ""
+
+    val quotedCss = """
+        blockquote, .gmail_quote, .gmail_extra, .yahoo_quoted, .moz-cite-prefix, #appendonsend, #divRplyFwdMsg, [name="quoted-content"] { display: none; }
+        .show-quotes blockquote, .show-quotes .gmail_quote, .show-quotes .gmail_extra, .show-quotes .yahoo_quoted, .show-quotes .moz-cite-prefix, .show-quotes #appendonsend, .show-quotes #divRplyFwdMsg, .show-quotes [name="quoted-content"] { display: block; padding: 0 !important; margin: 0 !important; background: transparent !important; }
+        blockquote { border-left: 3px solid ${linkColor}44; padding: 4px 0 4px 12px !important; margin: 8px 0 !important; background: transparent !important; color: ${textColor}aa; }
+    """.trimIndent()
+
+    val fontSize = (15f * fontScaleMultiplier).coerceIn(10f, 28f)
+    val responsiveCss = if (useOverviewScaling) {
+        """
+            html, body { min-width: 0 !important; overflow-x: hidden !important; }
+            body { zoom: $emailZoomFactor; font-size: ${fontSize}px; line-height: 1.65; margin: 0; padding: 4px; word-break: break-word; overflow-wrap: break-word; -webkit-font-smoothing: antialiased; }
+            body, body * { box-sizing: border-box !important; }
+            img { max-width: 100% !important; height: auto !important; }
+            $imgBlockCss
+            $quotedCss
+        """.trimIndent()
+    } else {
+        """
+            html, body { width: 100% !important; min-width: 0 !important; max-width: 100% !important; overflow-x: auto !important; }
+            body { font-size: ${fontSize}px; line-height: 1.65; margin: 0; padding: 4px; word-break: break-word; overflow-wrap: break-word; -webkit-font-smoothing: antialiased; }
+            body, body * { box-sizing: border-box !important; }
+            center, .gwfw, .m-shell, .td { width: 100% !important; min-width: 0 !important; max-width: 100% !important; }
+            div, p, span, a, h1, h2, h3, h4, h5, h6 { max-width: 100% !important; min-width: 0 !important; overflow-wrap: break-word; }
+            th[scope="col"] { width: auto !important; min-width: max-content !important; white-space: nowrap !important; }
+            [width="600"], [width="640"], [width="700"] { width: 100% !important; }
+            [style*="width:600px"], [style*="width: 600px"], [style*="min-width:600px"], [style*="min-width: 600px"],
+            [style*="width:640px"], [style*="width: 640px"], [style*="min-width:640px"], [style*="min-width: 640px"] { width: 100% !important; min-width: 0 !important; }
+            img { max-width: 100% !important; height: auto !important; }
+            $imgBlockCss
+            $quotedCss
+        """.trimIndent()
+    }
+    return """
+    <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>$responsiveCss</style></head>
+    <body class="${if (showQuotedText) "show-quotes" else ""}">${stripBodyInlineStyles(bodyWithBlockedRemoteSources)}<style>$responsiveCss</style></body></html>
+    """.trimIndent()
+}
+
+private fun openAttachment(context: android.content.Context, attachment: EmailAttachmentInfo, bytes: ByteArray?) {
+    if (bytes == null) return
+    try {
+        val attachmentsDir = java.io.File(context.cacheDir, "attachments")
+        attachmentsDir.mkdirs()
+        val safeName = attachment.name.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val file = java.io.File(attachmentsDir, safeName)
+        file.writeBytes(bytes)
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, attachment.mimeType)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(android.content.Intent.createChooser(intent, "Open with..."))
+    } catch (e: Exception) {
+        android.util.Log.e("EmailDetail", "Failed to open attachment", e)
+    }
+}
+
+
+@Composable
+private fun AttachmentsSection(
+    attachments: List<EmailAttachmentInfo>,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit = { _, _, _, _ -> }
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "${attachments.size} Attachment${if (attachments.size > 1) "s" else ""}",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        val (imageAttachments, fileAttachments) = attachments.partition {
+            com.shrivatsav.monomail.ui.components.isImageAttachment(it.mimeType, it.name)
+        }
+        imageAttachments.forEach { attachment ->
+            ImageAttachmentCard(
+                attachment = attachment,
+                onFetchAttachment = onFetchAttachment,
+                onNavigateToAttachmentViewer = onNavigateToAttachmentViewer
+            )
+        }
+        if (fileAttachments.isNotEmpty()) {
+            BoxWithConstraints {
+                val columnWidth = 200.dp
+                val availableWidth = maxWidth
+                val columns = maxOf(1, (availableWidth / columnWidth).toInt())
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    fileAttachments.chunked(columns).forEach { rowItems ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowItems.forEach { attachment ->
+                                FileAttachmentCard(
+                                    attachment = attachment,
+                                    onFetchAttachment = onFetchAttachment,
+                                    onNavigateToAttachmentViewer = onNavigateToAttachmentViewer,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            repeat(columns - rowItems.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImageAttachmentCard(
+    attachment: EmailAttachmentInfo,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit = { _, _, _, _ -> }
+) {
+    var imageBytes by remember { androidx.compose.runtime.mutableStateOf<ByteArray?>(null) }
+    androidx.compose.runtime.LaunchedEffect(attachment.id) {
+        imageBytes = try {
+            onFetchAttachment(attachment.messageId, attachment.id)
+        } catch (e: Exception) {
+            android.util.Log.e("EmailDetailScreen", "Failed to fetch image attachment ${attachment.id}", e)
+            null
+        }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .clickable {
+                if (imageBytes != null) {
+                    onNavigateToAttachmentViewer(attachment.messageId, attachment.id, attachment.mimeType, attachment.name)
+                }
+            }
+    ) {
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            val bytes = imageBytes
+            if (bytes != null) {
+                val opts = android.graphics.BitmapFactory.Options().apply {
+                    inSampleSize = 2
+                }
+                val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                if (bitmap != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = attachment.name,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 280.dp),
+                        contentScale = androidx.compose.ui.layout.ContentScale.FillWidth
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(120.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AttachFile,
+                            contentDescription = "Attachment",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(160.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Image,
+                contentDescription = "Attachment Options",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = attachment.name,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = com.shrivatsav.monomail.ui.components.formatFileSize(attachment.size.toLong()),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun FileAttachmentCard(
+    attachment: EmailAttachmentInfo,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit = { _, _, _, _ -> },
+    modifier: Modifier = Modifier
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var isFetching by remember { androidx.compose.runtime.mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    Row(
+        modifier = modifier
+            .clip(cornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .clickable {
+                if (!isFetching) {
+                    val category = com.shrivatsav.monomail.ui.components.classifyAttachment(attachment.mimeType, attachment.name)
+                    if (com.shrivatsav.monomail.ui.components.isPreviewableInApp(category)) {
+                        onNavigateToAttachmentViewer(attachment.messageId, attachment.id, attachment.mimeType, attachment.name)
+                    } else {
+                        isFetching = true
+                        scope.launch {
+                            val bytes = onFetchAttachment(attachment.messageId, attachment.id)
+                            openAttachment(context, attachment, bytes)
+                            isFetching = false
+                        }
+                    }
+                }
+            }
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        com.shrivatsav.monomail.ui.components.AttachmentPreviewCard(
+            name = attachment.name,
+            mimeType = attachment.mimeType,
+            size = attachment.size.toLong(),
+            isFetching = isFetching,
+            mode = com.shrivatsav.monomail.ui.components.PreviewMode.DETAIL,
+            onClick = null
+        )
+    }
+}
+
+@Composable
+private fun ThreadAttachmentsSummary(
+    attachmentsWithSender: List<Pair<EmailAttachmentInfo, String>>,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val imageAttachments = attachmentsWithSender.filter { com.shrivatsav.monomail.ui.components.isImageAttachment(it.first.mimeType, it.first.name) }
+    val fileAttachments = attachmentsWithSender.filter { !com.shrivatsav.monomail.ui.components.isImageAttachment(it.first.mimeType, it.first.name) }
+    val totalCount = attachmentsWithSender.size
+    val imageCount = imageAttachments.size
+
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        AttachmentToggleButton(
+            totalCount = totalCount,
+            imageCount = imageCount,
+            expanded = expanded,
+            onClick = { expanded = !expanded }
+        )
+
+        if (expanded) {
+            ExpandedAttachmentList(
+                imageAttachments = imageAttachments,
+                fileAttachments = fileAttachments,
+                onFetchAttachment = onFetchAttachment,
+                onNavigateToAttachmentViewer = onNavigateToAttachmentViewer
+            )
+        }
+    }
+}
+
+@Composable
+private fun AttachmentToggleButton(
+    totalCount: Int,
+    imageCount: Int,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(cornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.AttachFile,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = "$totalCount Attachment${if (totalCount != 1) "s" else ""}" +
+                    if (imageCount > 0) " ($imageCount image${if (imageCount != 1) "s" else ""})" else "",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            contentDescription = if (expanded) "Collapse" else "Expand",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+    }
+}
+
+@Composable
+private fun ExpandedAttachmentList(
+    imageAttachments: List<Pair<EmailAttachmentInfo, String>>,
+    fileAttachments: List<Pair<EmailAttachmentInfo, String>>,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        imageAttachments.forEach { (attachment, sender) ->
+            Column {
+                ImageAttachmentCard(
+                    attachment = attachment,
+                    onFetchAttachment = onFetchAttachment,
+                    onNavigateToAttachmentViewer = onNavigateToAttachmentViewer
+                )
+                Text(
+                    text = "from $sender",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                )
+            }
+        }
+
+        if (fileAttachments.isNotEmpty()) {
+            FileAttachmentsGrid(
+                fileAttachments = fileAttachments,
+                onFetchAttachment = onFetchAttachment,
+                onNavigateToAttachmentViewer = onNavigateToAttachmentViewer
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun FileAttachmentsGrid(
+    fileAttachments: List<Pair<EmailAttachmentInfo, String>>,
+    onFetchAttachment: suspend (String, String) -> ByteArray?,
+    onNavigateToAttachmentViewer: (messageId: String, attachmentId: String, mimeType: String, name: String) -> Unit,
+) {
+    BoxWithConstraints {
+        val columnWidth = 200.dp
+        val columns = maxOf(1, (maxWidth / columnWidth).toInt())
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            fileAttachments.chunked(columns).forEach { rowItems ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowItems.forEach { (attachment, sender) ->
+                        Column(modifier = Modifier.weight(1f)) {
+                            FileAttachmentCard(
+                                attachment = attachment,
+                                onFetchAttachment = onFetchAttachment,
+                                onNavigateToAttachmentViewer = onNavigateToAttachmentViewer,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                text = "from $sender",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                            )
+                        }
+                    }
+                    repeat(columns - rowItems.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private val detailDateFormat12 = SimpleDateFormat("MMM d, yyyy  h:mm a", Locale.getDefault())
+private val detailDateFormat24 = SimpleDateFormat("MMM d, yyyy  HH:mm", Locale.getDefault())
+
+/**
+ * Returns a relative timestamp for recent messages ("2h ago", "Yesterday")
+ * and falls back to the full date for older messages.
+ */
+private fun formatRelativeDate(epochMillis: Long, use24HourTime: Boolean): String {
+    if (epochMillis == 0L) return ""
+    val now = System.currentTimeMillis()
+    val diff = now - epochMillis
+    val minutes = diff / 60_000
+    val hours = minutes / 60
+    val days = hours / 24
+    return when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "${minutes}m ago"
+        hours < 24 -> "${hours}h ago"
+        days == 1L -> "Yesterday"
+        days < 7 -> "${days}d ago"
+        days < 365 -> {
+            val cal = java.util.Calendar.getInstance().apply { timeInMillis = epochMillis }
+            val month = cal.getDisplayName(java.util.Calendar.MONTH, java.util.Calendar.SHORT, Locale.getDefault())
+            "${cal.get(java.util.Calendar.DAY_OF_MONTH)} $month"
+        }
+
+        else -> formatDetailDate(epochMillis, use24HourTime)
+    }
+}
+
+private fun displayName(from: String): String {
+    val nameMatch = Regex("""^"?([^"<]+?)"?\s*<""").find(from)
+    return nameMatch?.groupValues?.get(1)?.trim() ?: from.trim()
+}
+
+private fun looksFixedWidthTemplate(html: String): Boolean {
+    if (html.length < 500) return false
+    return FIXED_WIDTH_ATTR.containsMatchIn(html) ||
+            FIXED_WIDTH_STYLE.containsMatchIn(html) ||
+            html.contains("m-shell", ignoreCase = true) ||
+            html.contains("tbl_main", ignoreCase = true)
+}
+
+private fun looksDataTableEmail(html: String): Boolean {
+    val lower = html.lowercase(Locale.US)
+    return lower.contains("<thead") ||
+            lower.contains("<th") ||
+            lower.contains("scope=\"col\"") ||
+            lower.contains("role=\"columnheader\"")
+}
+
+// ponytail: emails with "stack" class + column stacking are genuinely responsive — skip zoom
+private fun looksMobileFriendly(html: String): Boolean {
+    val lower = html.lowercase(Locale.US)
+    return lower.contains("stack") && lower.contains("column")
+}
+
+
+// ponytail: strips inline style="" from <body> tags so wrapper CSS isn't overridden
+private val BODY_STYLE_RE = Regex("""<body\b([^>]*?)style\s*=\s*"[^"]*"([^>]*?)>""", RegexOption.IGNORE_CASE)
+private val BODY_STYLE_RE_SINGLE = Regex("""<body\b([^>]*?)style\s*=\s*'[^']*'([^>]*?)>""", RegexOption.IGNORE_CASE)
+
+private fun stripBodyInlineStyles(html: String): String {
+    var result = BODY_STYLE_RE.replace(html) { m ->
+        val pre = m.groupValues[1]
+        val post = m.groupValues[2]
+        "<body$pre$post>"
+    }
+    result = BODY_STYLE_RE_SINGLE.replace(result) { m ->
+        val pre = m.groupValues[1]
+        val post = m.groupValues[2]
+        "<body$pre$post>"
+    }
+    return result
+}
+
+private val FIXED_WIDTH_ATTR = Regex("""\bwidth\s*=\s*["']?(5[4-9]\d|[6-8]\d\d)["']?""", RegexOption.IGNORE_CASE)
+private val FIXED_WIDTH_STYLE = Regex("""(?:width|min-width)\s*:\s*(5[4-9]\d|[6-8]\d\d)px""", RegexOption.IGNORE_CASE)
+
+private fun formatDetailDate(epochMillis: Long, use24HourTime: Boolean): String {
+    if (epochMillis == 0L) return ""
+    val formatter = if (use24HourTime) detailDateFormat24 else detailDateFormat12
+    return formatter.format(Date(epochMillis))
+}
+
+@Composable
+fun CollapsedGroupItem(count: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "$count older messages",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}

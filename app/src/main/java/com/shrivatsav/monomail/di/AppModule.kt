@@ -1,0 +1,164 @@
+package com.shrivatsav.monomail.di
+
+import android.accounts.Account
+import android.content.Context
+import com.shrivatsav.monomail.ScheduledEmailEvent
+import com.shrivatsav.monomail.SentEmailEvent
+import com.shrivatsav.monomail.core.data.auth.AccountManager
+import com.shrivatsav.monomail.core.data.auth.AuthManager
+import com.shrivatsav.monomail.core.data.auth.UserProfile
+import com.shrivatsav.monomail.core.data.auth.GoogleAuthException
+import com.shrivatsav.monomail.core.data.auth.provideGoogleAuthHelper
+import com.shrivatsav.monomail.core.network.provider.EmailProvider
+import com.shrivatsav.monomail.core.network.provider.GmailProvider
+import com.shrivatsav.monomail.core.network.provider.OutlookProvider
+import com.shrivatsav.monomail.core.network.provider.ProviderCache
+import com.shrivatsav.monomail.core.network.provider.imap.ImapAccountConfig
+import com.shrivatsav.monomail.core.network.provider.imap.ImapProvider
+import com.shrivatsav.monomail.core.network.remote.RetrofitClient
+import com.shrivatsav.monomail.core.data.repository.EmailRepository
+import com.shrivatsav.monomail.core.data.settings.SettingsDataStore
+import com.shrivatsav.monomail.security.SecurityUtil
+import dagger.Module
+import kotlin.jvm.JvmSuppressWildcards
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.runBlocking
+import javax.inject.Singleton
+
+@Module
+@InstallIn(SingletonComponent::class)
+object AppModule {
+
+    @Provides @Singleton
+    fun provideAccountManager(@ApplicationContext context: Context): AccountManager =
+        AccountManager(context)
+
+    @Provides @Singleton
+    fun provideAuthManager(
+        @ApplicationContext context: Context,
+        accountManager: AccountManager,
+        pushNotificationManager: com.shrivatsav.monomail.core.data.push.PushNotificationManager,
+        database: com.shrivatsav.monomail.core.database.local.AppDatabase
+    ): AuthManager = AuthManager(context, accountManager, pushNotificationManager, database)
+
+    @Provides @Singleton
+    fun provideSettingsDataStore(@ApplicationContext context: Context): SettingsDataStore =
+        SettingsDataStore(context)
+
+    @Provides @Singleton
+    fun provideSentEmailEvents(): MutableSharedFlow<SentEmailEvent> =
+        MutableSharedFlow(replay = 1, extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+
+    @Provides @Singleton
+    fun provideScheduledEmailEvents(): MutableSharedFlow<ScheduledEmailEvent> =
+        MutableSharedFlow(replay = 0)
+
+    @Provides @Singleton
+    fun provideProviderFactory(
+        @ApplicationContext context: Context,
+        accountManager: AccountManager,
+        authManager: AuthManager
+    ): (UserProfile) -> EmailProvider {
+        return { profile ->
+            ProviderCache.getOrCreate(profile.id) {
+                val retrofit = createRetrofitClient(profile, context, accountManager, authManager)
+                retrofit.cachedToken.set(profile.accessToken.takeIf { it.isNotEmpty() })
+                createProvider(profile, retrofit, context, authManager)
+            }
+        }
+    }
+
+    private fun createRetrofitClient(
+        profile: UserProfile,
+        context: Context,
+        accountManager: AccountManager,
+        authManager: AuthManager
+    ) = RetrofitClient(
+        tokenRefresher = { refreshProfileToken(profile, context, accountManager, authManager) },
+        onRefreshFailed = { authManager.notifyReauthRequired(profile.email, profile.provider) },
+        onHttpError = { code -> android.util.Log.w("AppModule", "HTTP $code for ${profile.id}") }
+    )
+
+    private fun refreshProfileToken(
+        profile: UserProfile,
+        context: Context,
+        accountManager: AccountManager,
+        authManager: AuthManager
+    ): String? {
+        // ponytail: runBlocking required — tokenRefresher is sync (OkHttp interceptor). Dispatchers.IO keeps DataStore ops off the dispatcher thread.
+        val currentProfile = runBlocking(kotlinx.coroutines.Dispatchers.IO) { accountManager.getAccounts().find { it.id == profile.id } }
+            ?: return null
+        return try {
+            val newToken = fetchNewToken(currentProfile, context, authManager)
+            if (newToken != null) {
+                runBlocking(kotlinx.coroutines.Dispatchers.IO) { authManager.updateAccessToken(currentProfile.copy(accessToken = newToken)) }
+                ProviderCache.invalidate(profile.id)
+            }
+            newToken
+        } catch (e: GoogleAuthException) {
+            runBlocking(kotlinx.coroutines.Dispatchers.Main) {
+                if (e.intent != null) {
+                    authManager.notifyReauthRequired(profile.email, profile.provider, e.intent)
+                } else {
+                    authManager.notifyReauthRequired(profile.email, profile.provider)
+                }
+            }
+            android.util.Log.e("AppModule", "Token refresh requires consent for ${profile.id}", e)
+            null
+        } catch (e: Exception) {
+            android.util.Log.e("AppModule", "Token refresh failed for ${profile.id}", e)
+            null
+        }
+    }
+
+    private fun fetchNewToken(profile: UserProfile, context: Context, authManager: AuthManager): String? = when (profile.provider) {
+        "gmail" -> {
+            // ponytail: get new token first, then clear old — if getToken fails, old token is still valid
+            runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                val helper = provideGoogleAuthHelper()
+                val newToken = helper.getToken(context, profile.email, AuthManager.GMAIL_SCOPE)
+                val oldToken = profile.accessToken
+                if (oldToken.isNotEmpty() && oldToken != newToken) helper.clearToken(context, oldToken)
+                newToken
+            }
+        }
+        "outlook" -> runBlocking { authManager.microsoftAuthManager.getAccessTokenSilently(profile.id) }
+        else -> null
+    }
+
+    private fun createProvider(profile: UserProfile, retrofit: RetrofitClient, context: Context, authManager: AuthManager): EmailProvider = when (profile.provider) {
+        "gmail" -> GmailProvider(retrofit.gmailApi, context)
+        "outlook" -> OutlookProvider(retrofit.outlookApi, context)
+        "imap" -> createImapProvider(profile, context, authManager)
+        else -> throw IllegalArgumentException("Unknown provider: ${profile.provider}")
+    }
+
+    private fun createImapProvider(profile: UserProfile, context: Context, authManager: AuthManager): ImapProvider = try {
+        val configJson = SecurityUtil.decryptString(profile.accessToken)
+            ?: throw IllegalStateException("Cannot decrypt IMAP config")
+        val config = ImapAccountConfig.fromJson(configJson)
+        val password = SecurityUtil.decryptString(profile.refreshToken)
+            ?: throw IllegalStateException("Cannot decrypt IMAP password")
+        android.util.Log.i("AppModule", "IMAP provider for ${profile.id}: smtpHost='${config.smtpHost}' smtpPort=${config.smtpPort} ssl=${config.smtpSsl} startTls=${config.smtpStartTls}")
+        ImapProvider(config, password, context)
+    } catch (e: Exception) {
+        android.util.Log.e("AppModule", "Failed to create IMAP provider for ${profile.id}", e)
+        authManager.notifyReauthRequired(profile.email, "imap")
+        throw e
+    }
+
+    @Provides @Singleton
+    fun provideEmailRepository(
+        providerFactory: (@JvmSuppressWildcards (UserProfile) -> EmailProvider),
+        database: com.shrivatsav.monomail.core.database.local.AppDatabase,
+        @ApplicationContext context: Context,
+        accountManager: AccountManager,
+        pendingActionDao: com.shrivatsav.monomail.core.database.local.PendingActionDao,
+        pendingSendDao: com.shrivatsav.monomail.core.database.local.PendingSendDao
+    ): EmailRepository = EmailRepository(providerFactory, database, context, accountManager, pendingActionDao, pendingSendDao)
+}

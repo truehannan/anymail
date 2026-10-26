@@ -1,0 +1,784 @@
+package com.shrivatsav.monomail.feature.auth
+
+import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import kotlinx.coroutines.flow.drop
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
+import com.shrivatsav.monomail.ui.theme.cornerShape
+import com.shrivatsav.monomail.ui.components.SlideSheet
+import androidx.compose.foundation.Image
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Policy
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.Web
+import androidx.compose.material.icons.rounded.Mail
+import androidx.compose.material.icons.rounded.Window
+import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.painterResource
+
+// =============================================================================
+// SignInScreen
+// =============================================================================
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
+@Composable
+fun SignInScreen(
+    viewModel: SignInViewModel,
+    onSignInSuccess: () -> Unit,
+    onNavigateToLegal: (String) -> Unit,
+    onNavigateToImapSetup: (String?, String?) -> Unit,
+) {
+    val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    var showProviderSheet by remember { mutableStateOf(false) }
+    var showVerificationModal by remember { mutableStateOf(false) }
+
+    val consentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.onConsentResult(context)
+        }
+    }
+
+    val scale = remember { Animatable(0.9f) }
+    val alpha = remember { Animatable(0f) }
+
+    LaunchedEffect(Unit) {
+        scale.animateTo(
+            targetValue = 1f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMedium,
+            )
+        )
+    }
+    LaunchedEffect(Unit) {
+        alpha.animateTo(
+            targetValue = 1f,
+            animationSpec = spring(stiffness = Spring.StiffnessLow),
+        )
+    }
+    LaunchedEffect(state) {
+        when (state) {
+            is SignInState.Success -> onSignInSuccess()
+            is SignInState.NeedsConsent -> {
+                consentLauncher.launch((state as SignInState.NeedsConsent).intent)
+            }
+            is SignInState.Error -> {
+                showProviderSheet = false
+                snackbarHostState.showSnackbar((state as SignInState.Error).message)
+            }
+            else -> {}
+        }
+    }
+
+    if (showVerificationModal) {
+        VerificationModal(onDismiss = { showVerificationModal = false })
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        SignInContent(
+            scale = scale.value,
+            alpha = alpha.value,
+            onContinueWithEmail = { showProviderSheet = true },
+            onNavigateToLegal = onNavigateToLegal,
+            context = context,
+        )
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            Snackbar(
+                snackbarData = it,
+                shape = com.shrivatsav.monomail.ui.theme.cornerShape(12.dp),
+                containerColor = MaterialTheme.colorScheme.inverseSurface,
+                contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                actionContentColor = MaterialTheme.colorScheme.inverseOnSurface
+            )
+        }
+        if (state is SignInState.ShowSyncPrompt) {
+            var pendingDays by remember { mutableStateOf<Int?>(null) }
+            val days = pendingDays
+            if (days == null) {
+                SyncWindowDialog(
+                    onConfirm = { pendingDays = it },
+                    onCancel = { viewModel.cancelInitialSync() }
+                )
+            } else {
+                SyncWarningDialog(
+                    days = days,
+                    onProceed = { viewModel.startInitialSync(it) },
+                    onBack = { pendingDays = null },
+                    onCancel = { viewModel.cancelInitialSync() }
+                )
+            }
+        }
+
+
+        if (showProviderSheet) {
+            ProviderSheet(
+                state = state,
+                onDismiss = { if (state !is SignInState.Loading) showProviderSheet = false },
+                onGoogleSignIn = {
+                    if (!BuildConfig.IS_GITHUB_BUILD) {
+                        viewModel.signIn(context)
+                    } else {
+                        showProviderSheet = false
+                        onNavigateToImapSetup(null, "Gmail")
+                    }
+                },
+                onMicrosoftSignIn = { handleMicrosoftSignIn(context) { activity -> viewModel.signInMicrosoft(activity) } },
+                onImapClick = { email -> 
+                    showProviderSheet = false
+                    onNavigateToImapSetup(email, null) 
+                },
+                onResendClick = {
+                    showProviderSheet = false
+                    // Navigate to Resend setup screen
+                    // TODO: Implement navigation to Resend setup
+                }
+            )
+        }
+    }
+}
+
+
+private fun handleMicrosoftSignIn(context: Context, onSignIn: (android.app.Activity) -> Unit) {
+    context.findActivity()?.let { onSignIn(it) }
+        ?: Toast.makeText(context, "Activity not found", Toast.LENGTH_SHORT).show()
+}
+
+@Composable
+private fun SignInContent(
+    scale: Float,
+    alpha: Float,
+    onContinueWithEmail: () -> Unit,
+    onNavigateToLegal: (String) -> Unit,
+    context: Context,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .scale(scale)
+            .alpha(alpha),
+        contentAlignment = Alignment.Center
+    ) {
+        val configuration = LocalConfiguration.current
+        val isTablet = configuration.screenWidthDp >= 600
+
+        val BrandingBlock: @Composable () -> Unit = {
+            Image(
+                painter = painterResource(com.shrivatsav.monomail.feature.auth.R.drawable.ic_signin_mark),
+                contentDescription = "Monomail",
+                modifier = Modifier.size(96.dp),
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                text = "Any Mail",
+                style = MaterialTheme.typography.displaySmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Your inbox, connected.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                textAlign = TextAlign.Center,
+            )
+        }
+
+        val ActionsBlock: @Composable () -> Unit = {
+            Button(
+                onClick = onContinueWithEmail,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                shape = MaterialTheme.shapes.large,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                Text(
+                    text = "Continue with Email",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = "Privacy Policy",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { onNavigateToLegal("privacy") },
+                )
+                Text(
+                    text = " • ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                )
+                Text(
+                    text = "Terms of Service",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { onNavigateToLegal("tos") },
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "monomail.millosaurs.me",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable {
+                    try {
+                        context.startActivity(
+                            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://monomail.millosaurs.me"))
+                        )
+                    } catch (e: Exception) { android.util.Log.w("SignIn", "Failed to open URL", e) }
+                },
+            )
+        }
+
+        if (isTablet) {
+            Row(
+                modifier = Modifier
+                    .widthIn(max = 800.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(48.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    BrandingBlock()
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    ActionsBlock()
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 480.dp)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                BrandingBlock()
+                Spacer(modifier = Modifier.height(64.dp))
+                ActionsBlock()
+            }
+        }
+
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun ProviderSheet(
+    state: SignInState,
+    onDismiss: () -> Unit,
+    onGoogleSignIn: (String?) -> Unit,
+    onMicrosoftSignIn: () -> Unit,
+    onImapClick: (String?) -> Unit,
+    onResendClick: () -> Unit,
+) {
+    SlideSheet(
+        onDismiss = onDismiss,
+        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 24.dp),
+    ) {
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = "Choose your provider",
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        ProviderButtons(
+            state = state,
+            onGoogleSignIn = onGoogleSignIn,
+            onMicrosoftSignIn = onMicrosoftSignIn,
+            onImapClick = onImapClick,
+            onResendClick = onResendClick,
+        )
+    }
+}
+
+// =============================================================================
+// ProviderSelectionDialog  (used when adding a second account from settings)
+// =============================================================================
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
+@Composable
+fun ProviderSelectionDialog(
+    viewModel: SignInViewModel,
+    onSuccess: () -> Unit,
+    onNavigateToImapSetup: (String?, String?) -> Unit
+) {
+    val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
+    var showVerificationModal by remember { mutableStateOf(false) }
+
+    val consentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.onConsentResult(context)
+        }
+    }
+    // Reset any stale state from a previous sign-in (e.g. leftover Success)
+    // to prevent immediate dismissal of this dialog. We collect the raw flow
+    // with drop(1) so the reset emission itself doesn't trigger a reaction.
+    LaunchedEffect(Unit) {
+        viewModel.resetState()
+        viewModel.state.drop(1).collect { s ->
+            when (s) {
+                is SignInState.Success -> onSuccess()
+                is SignInState.NeedsConsent -> {
+                    consentLauncher.launch(s.intent)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    if (showVerificationModal) {
+        VerificationModal(onDismiss = { showVerificationModal = false })
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(0.9f),
+        shape = cornerShape(28.dp),
+        color = MaterialTheme.colorScheme.background,
+        contentColor = MaterialTheme.colorScheme.onBackground,
+        shadowElevation = 32.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "Add Account",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Choose your provider",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            )
+            Spacer(modifier = Modifier.height(32.dp))
+            ProviderButtons(
+                state = state,
+                onGoogleSignIn = {
+                    if (!BuildConfig.IS_GITHUB_BUILD) {
+                        viewModel.signIn(context)
+                    } else {
+                        onNavigateToImapSetup(null, "Gmail")
+                    }
+                },
+                onMicrosoftSignIn = {
+                    context.findActivity()?.let { activity ->
+                        viewModel.signInMicrosoft(activity)
+                    } ?: Toast.makeText(context, "Activity not found", Toast.LENGTH_SHORT).show()
+                },
+                onImapClick = { email -> onNavigateToImapSetup(email, null) },
+                onResendClick = {
+                    // TODO: Navigate to Resend setup screen
+                    // This would need to be handled by the caller of ProviderSelectionDialog
+                }
+            )
+            if (state is SignInState.Error) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = (state as SignInState.Error).message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VerificationModal(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Rounded.Shield,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        title = {
+            Text(
+                text = "Verification in Progress",
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center
+            )
+        },
+        text = {
+            Text(
+                text = "Google's OAuth verification is in progress and will be enabled once that completes.",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("OK")
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ProviderButtons(
+    state: SignInState,
+    onGoogleSignIn: (String?) -> Unit,
+    onMicrosoftSignIn: () -> Unit,
+    onImapClick: (String?) -> Unit,
+    onResendClick: () -> Unit,
+) {
+    val isLoading = state is SignInState.Loading
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Google/Gmail
+        Button(
+            onClick = { onGoogleSignIn(null) },
+            enabled = !isLoading,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+        ) {
+            if (isLoading) {
+                LoadingIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    androidx.compose.material3.Icon(
+                        androidx.compose.material.icons.Icons.Rounded.Mail,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Sign in with Gmail",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+            }
+        }
+
+        // Microsoft/Outlook
+        Button(
+            onClick = onMicrosoftSignIn,
+            enabled = !isLoading,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondary,
+                contentColor = MaterialTheme.colorScheme.onSecondary,
+            ),
+        ) {
+            if (isLoading) {
+                LoadingIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = MaterialTheme.colorScheme.onSecondary,
+                )
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    androidx.compose.material3.Icon(
+                        androidx.compose.material.icons.Icons.Rounded.Window,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Sign in with Microsoft",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+            }
+        }
+
+        // Resend
+        Button(
+            onClick = onResendClick,
+            enabled = !isLoading,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.tertiary,
+                contentColor = MaterialTheme.colorScheme.onTertiary,
+            ),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.Rounded.Send,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Connect Resend Inbox",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+        }
+
+        // IMAP/SMTP
+        Button(
+            onClick = { onImapClick(null) },
+            enabled = !isLoading,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                contentContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            ),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.Rounded.Cloud,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Other (IMAP/SMTP)",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+// =============================================================================
+
+@Composable
+fun SyncWindowDialog(onConfirm: (Int) -> Unit, onCancel: () -> Unit) {
+    var selectedDays by remember { mutableStateOf<Int?>(null) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        title = { androidx.compose.material3.Text("Initial Sync") },
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                onClick = { selectedDays?.let(onConfirm) },
+                enabled = selectedDays != null
+            ) {
+                androidx.compose.material3.Text("Next")
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onCancel) {
+                androidx.compose.material3.Text("Cancel")
+            }
+        },
+        text = {
+            androidx.compose.foundation.layout.Column {
+                androidx.compose.material3.Text(
+                    "How many days of recent emails would you like to download for offline access?",
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                // Tap an option to select it, then "Next" to continue.
+                listOf(7, 14, 30).forEach { days ->
+                    androidx.compose.material3.FilledTonalButton(
+                        onClick = { selectedDays = days },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        colors = if (selectedDays == days) {
+                            androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            androidx.compose.material3.ButtonDefaults.filledTonalButtonColors()
+                        }
+                    ) {
+                        androidx.compose.material3.Text("Last $days days")
+                    }
+                }
+            }
+        }
+    )
+}
+
+/**
+ * Second step of the initial-sync flow: one-time warning about download time,
+ * shown after the user picks a sync window and taps "Next".
+ * Back returns to the window dialog; Cancel aborts the whole flow.
+ */
+@Composable
+fun SyncWarningDialog(days: Int, onProceed: (Int) -> Unit, onBack: () -> Unit, onCancel: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onBack,
+        title = { androidx.compose.material3.Text("Heads up") },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { onProceed(days) }) {
+                androidx.compose.material3.Text("Proceed")
+            }
+        },
+        dismissButton = {
+            androidx.compose.foundation.layout.Row {
+                androidx.compose.material3.TextButton(onClick = onBack) {
+                    androidx.compose.material3.Text("Back")
+                }
+                androidx.compose.material3.TextButton(onClick = onCancel) {
+                    androidx.compose.material3.Text("Cancel")
+                }
+            }
+        },
+        text = {
+            androidx.compose.material3.Text(
+                "If you have too many emails or threads during the last $days days, " +
+                    "it may take longer to sync and download the contents. " +
+                    "This will be one time, and next syncs will be faster."
+            )
+        }
+    )
+}
