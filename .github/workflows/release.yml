@@ -1,68 +1,17 @@
-name: Build and Release
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-concurrency:
-  group: release-main
-  cancel-in-progress: false
-
-jobs:
-  release:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Set up Java
-        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@41ad77ca97e46ee2e825d5e6b9a95d8169fcc44c # v4.4.2
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
-        with:
-          bun-version-file: backend/.bun-version
-
-      - name: Validate release secrets
+- name: Validate release secrets
         env:
           KEYSTORE_FILE_BASE64: ${{ secrets.KEYSTORE_FILE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          PUSH_BACKEND_URL: ${{ secrets.PUSH_BACKEND_URL }}
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-          SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
         run: |
           set -euo pipefail
-          failed=0
-          for name in \
-            KEYSTORE_FILE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD \
-            GOOGLE_CLIENT_ID PUSH_BACKEND_URL \
-            GOOGLE_SERVICES_JSON SERVICE_ACCOUNT_JSON; do
-            value="${!name:-}"
-            normalized="${value,,}"
-            if [ -z "$value" ] || [[ "$normalized" =~ placeholder|changeme|yourdomain|example\.com ]]; then
-              echo "::error::Required release secret $name is missing or contains a placeholder."
-              failed=1
+          for name in KEYSTORE_FILE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Required secret $name is missing."
+              exit 1
             fi
           done
-          exit "$failed"
 
       - name: Create release configuration
         env:
@@ -70,9 +19,6 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          PUSH_BACKEND_URL: ${{ secrets.PUSH_BACKEND_URL }}
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           set -euo pipefail
           printf '%s' "$KEYSTORE_FILE_BASE64" | base64 --decode > app/monomail-release.keystore
@@ -82,153 +28,6 @@ jobs:
             printf 'keyAlias=%s\n' "$KEY_ALIAS"
             printf 'keyPassword=%s\n' "$KEY_PASSWORD"
           } > keystore.properties
-          {
-            printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
-            printf 'PUSH_BACKEND_URL=%s\n' "$PUSH_BACKEND_URL"
-          } > secrets.properties
-          mkdir -p app/src/playstore
-          printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > app/src/playstore/google-services.json
-          test -s app/monomail-release.keystore
-          test -s app/src/playstore/google-services.json
 
-      - name: Resolve next immutable version
-        id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          base_sha=$(git rev-parse HEAD)
-          version=$(sed -n 's/.*versionName = "\([0-9][0-9.]*\)".*/\1/p' app/build.gradle.kts)
-          version_code=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts)
-          IFS=. read -r major minor patch <<< "$version"
-          patch=$((patch + 1))
-          if [ "$patch" -ge 100 ]; then
-            patch=0
-            minor=$((minor + 1))
-          fi
-          next_version="$major.$minor.$patch"
-          next_version_code=$((version_code + 1))
-          tag="v$next_version"
-
-          test -n "$version" && test -n "$version_code"
-          if git show-ref --verify --quiet "refs/tags/$tag" || \
-             git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 || \
-             gh release view "$tag" >/dev/null 2>&1; then
-            echo "::error::Tag or release $tag already exists; refusing to overwrite immutable release state."
-            exit 1
-          fi
-
-          sed -i "s/versionCode = $version_code/versionCode = $next_version_code/" app/build.gradle.kts
-          sed -i "s/versionName = \"$version\"/versionName = \"$next_version\"/" app/build.gradle.kts
-          {
-            echo "base_sha=$base_sha"
-            echo "previous_version=$version"
-            echo "version=$next_version"
-            echo "version_code=$next_version_code"
-            echo "tag=$tag"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Install locked backend dependencies
-        working-directory: backend
-        run: bun install --frozen-lockfile
-
-      - name: Validate backend
-        working-directory: backend
-        run: bun run typecheck && bun run test
-
-      - name: Validate Android and build signed release artifacts
-        run: >-
-          ./gradlew
-          lintGithubRelease lintPlaystoreRelease
-          testGithubDebugUnitTest testPlaystoreDebugUnitTest
-          assembleGithubRelease bundlePlaystoreRelease
-          --stacktrace
-
-      - name: Prepare immutable artifacts and release notes
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p release-artifacts distribution/whatsnew
-          cp app/build/outputs/apk/github/release/app-github-release.apk "release-artifacts/MonoMail-$TAG.apk"
-          cp app/build/outputs/bundle/playstoreRelease/app-playstore-release.aab "release-artifacts/MonoMail-$TAG-playstore.aab"
-          cp app/build/outputs/mapping/githubRelease/mapping.txt "release-artifacts/MonoMail-$TAG-github-mapping.txt"
-          cp app/build/outputs/mapping/playstoreRelease/mapping.txt "release-artifacts/MonoMail-$TAG-playstore-mapping.txt"
-          (cd release-artifacts && sha256sum * > SHA256SUMS)
-
-          previous_tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
-          if [ -n "$previous_tag" ]; then
-            range="$previous_tag..${{ steps.version.outputs.base_sha }}"
-          else
-            range="${{ steps.version.outputs.base_sha }}"
-          fi
-          git log "$range" --pretty=format:'- %s' --no-merges \
-            --invert-grep --grep='^chore: bump version' > release_notes.md
-          if [ ! -s release_notes.md ]; then
-            printf '%s\n' '- No user-facing changes.' > release_notes.md
-          fi
-          {
-            printf '%s\n\n' "## What's Changed"
-            cat release_notes.md
-          } > release_notes.full.md
-          mv release_notes.full.md release_notes.md
-
-          plain=$(tr '\n' ' ' < release_notes.md | sed 's/## What.s Changed//; s/- / /g; s/  */ /g; s/^ //; s/ $//')
-          printf '%.500s' "$plain" > distribution/whatsnew/whatsnew-en-GB
-
-      - name: Commit and atomically publish version tag
-        env:
-          BASE_SHA: ${{ steps.version.outputs.base_sha }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/build.gradle.kts
-          git commit -m "chore: bump version to $VERSION [skip ci]"
-          git diff --exit-code HEAD
-
-          git fetch origin main --tags
-          remote_main=$(git rev-parse origin/main)
-          if [ "$remote_main" != "$BASE_SHA" ]; then
-            echo "::error::main advanced during validation; refusing to publish artifacts built from stale source."
-            exit 1
-          fi
-          git tag "$TAG"
-          test "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)"
-          git push --atomic origin "HEAD:refs/heads/main" "refs/tags/$TAG"
-
-      - name: Retain signed artifacts and R8 mappings
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: release-${{ steps.version.outputs.tag }}
-          path: release-artifacts/
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Upload AAB to Play Store
-        uses: r0adkll/upload-google-play@935ef9c68bb393a8e6116b1575626a7f5be3a7fb # v1.1.3
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.SERVICE_ACCOUNT_JSON }}
-          packageName: com.shrivatsav.monomail
-          releaseFiles: release-artifacts/MonoMail-${{ steps.version.outputs.tag }}-playstore.aab
-          track: beta
-          status: completed
-          whatsNewDirectory: distribution/whatsnew
-
-      - name: Create exact-tag GitHub draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          gh release create "$TAG" \
-            "release-artifacts/MonoMail-$TAG.apk" \
-            "release-artifacts/MonoMail-$TAG-github-mapping.txt" \
-            "release-artifacts/MonoMail-$TAG-playstore-mapping.txt" \
-            "release-artifacts/SHA256SUMS" \
-            --draft \
-            --title "$TAG" \
-            --notes-file release_notes.md
+      - name: Build signed APK
+        run: ./gradlew assembleGithubRelease --stacktrace
